@@ -1,6 +1,6 @@
 import * as testHelper from "./test_helper.js";
 import { withPromise } from "./test_helper.js";
-import { isNavigableSearchUrl, parseSearchPageOptions } from "../../pages/search_page_options.js";
+import { parseSearchPageOptions } from "../../pages/search_page_options.js";
 import * as vomnibarPage from "../../pages/vomnibar_page.js";
 import { initializeSearchPage } from "../../pages/search_page.js";
 
@@ -50,10 +50,10 @@ context("search page options", () => {
     for (
       const url of ["javascript:alert(1)", "data:text/html,hello", "invalid", "JAVASCRIPT:alert(1)"]
     ) {
-      assert.isFalse(isNavigableSearchUrl(url));
+      assert.isFalse(UrlUtils.isNavigableUrl(url));
     }
     for (const url of ["https://example.com", "chrome://settings", "file:///tmp/test.html"]) {
-      assert.isTrue(isNavigableSearchUrl(url));
+      assert.isTrue(UrlUtils.isNavigableUrl(url));
     }
   });
 });
@@ -70,6 +70,7 @@ context("standalone search page", () => {
     });
     opened = null;
     completions = [];
+    stub(chrome.tabs, "getCurrent", withPromise(() => ({ id: 99 })));
     stub(
       chrome.runtime,
       "sendMessage",
@@ -85,6 +86,21 @@ context("standalone search page", () => {
   should("dispatch a configured engine using its URL template", async () => {
     await initializeSearchPage("?engine=w&q=cats+%26+dogs");
     assert.equal("https://example.com/search?q=cats%20%26%20dogs", opened);
+  });
+
+  should("normalize bare URLs submitted without selecting an omni result", async () => {
+    for (const query of ["example.com", "localhost:8080", "127.0.0.1:8080/path"]) {
+      await initializeSearchPage(`?source=omni&q=${encodeURIComponent(query)}`);
+      let navigation;
+      // Capture the launch callback so the test can await navigation independently of the UI's
+      // asynchronous hide acknowledgement.
+      stub(vomnibarPage.ui, "hide", (callback) => {
+        navigation = callback();
+      });
+      await vomnibarPage.ui.handleEnterKey({});
+      await navigation;
+      assert.equal(`http://${query}`, opened);
+    }
   });
 
   should("show an error for unknown engines and executable engine URLs", async () => {

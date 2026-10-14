@@ -94,6 +94,25 @@ context("bookmark completer", () => {
     assert.equal([bookmark3.url], results.map((s) => s.url));
   });
 
+  should(
+    "filter unsupported navigation before limiting results without changing normal searches",
+    async () => {
+      const tree = Array.from({ length: 10 }, (_, index) => ({
+        title: "/crowded",
+        url: `javascript:alert(${index})`,
+      }));
+      tree.push({ title: "Longer title /crowded", url: "https://example.com/valid" });
+      stub(chrome.bookmarks, "getTree", () => tree);
+      const multi = new MultiCompleter([completer]);
+      const request = { query: "/crowded", queryTerms: ["/crowded"], match: "title-token" };
+      const normalResults = await multi.filter(request);
+      assert.equal(10, normalResults.length);
+      assert.isTrue(normalResults.every((s) => s.url.startsWith("javascript:")));
+      const standaloneResults = await multi.filter({ ...request, navigationOnly: true });
+      assert.equal(["https://example.com/valid"], standaloneResults.map((s) => s.url));
+    },
+  );
+
   should("construct bookmark paths correctly", async () => {
     completer.refresh();
     await filterCompleter(completer, ["mark2"]);
@@ -477,6 +496,48 @@ context("tab completer", () => {
     const results = await filterCompleter(completer, ["tab2"]);
     assert.equal(["tab2.com"], results.map((tab) => tab.url));
     assert.equal([2], results.map((tab) => tab.tabId));
+  });
+
+  should("exclude the standalone handoff tab before ranking or limiting results", async () => {
+    const handoff = {
+      id: 3,
+      title: "Vimium Search",
+      url: "chrome-extension://test/pages/search.html?q=missing",
+    };
+    stub(chrome.tabs, "query", () => [...tabs, handoff]);
+    const results = await completer.filter({ queryTerms: ["missing"], excludeTabId: 3 });
+    assert.equal([], results);
+    const normalResults = await filterCompleter(completer, ["missing"]);
+    assert.equal([3], normalResults.map((s) => s.tabId));
+  });
+});
+
+context("standalone search history", () => {
+  should("exclude handoff history variants while preserving ordinary history results", async () => {
+    const searchPage = "chrome-extension://test/pages/search.html";
+    stub(HistoryCache, "onLoaded", withPromise(() => {}));
+    stub(HistoryCache, "history", [
+      {
+        url: `${searchPage}?source=tabs&q=missing`,
+        title: "Vimium Search",
+        lastVisitTime: Date.now(),
+      },
+      {
+        url: `${searchPage}?source=omni&q=missing`,
+        title: "Vimium Search",
+        lastVisitTime: Date.now(),
+      },
+      { url: "https://example.com/missing", title: "Real destination", lastVisitTime: Date.now() },
+    ]);
+    const multi = new MultiCompleter([new HistoryCompleter()]);
+    const request = { query: "missing", queryTerms: ["missing"] };
+    assert.equal(3, (await multi.filter(request)).length);
+    const results = await multi.filter({
+      ...request,
+      navigationOnly: true,
+      excludeHistoryUrl: searchPage,
+    });
+    assert.equal(["https://example.com/missing"], results.map((s) => s.url));
   });
 });
 

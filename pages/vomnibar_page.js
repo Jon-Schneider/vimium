@@ -13,7 +13,6 @@ import "../lib/dom_utils.js";
 import "../lib/handler_stack.js";
 import * as UIComponentMessenger from "./ui_component_messenger.js";
 import * as userSearchEngines from "../background_scripts/user_search_engines.js";
-import { isNavigableSearchUrl } from "./search_page_options.js";
 
 // An instance of VomnibarUI. Exported for use by tests.
 export let ui;
@@ -44,6 +43,7 @@ export async function activate(options, standalone = false) {
     ui = new VomnibarUI();
   }
   ui.standalone = standalone;
+  ui.standaloneTabId = standalone ? (await chrome.tabs.getCurrent()).id : null;
   ui.match = options.match;
   ui.setCompleterName(options.completer);
   await ui.refreshCompletions();
@@ -374,13 +374,20 @@ class VomnibarUI {
       query,
       seenTabToOpenCompletionList: this.seenTabToOpenCompletionList,
       ...(this.match == "title-token" ? { match: this.match } : {}),
+      ...(this.standalone
+        ? {
+          navigationOnly: true,
+          excludeTabId: this.standaloneTabId,
+          excludeHistoryUrl: chrome.runtime.getURL("pages/search.html"),
+        }
+        : {}),
     });
 
     // Ensure that no new filter requests have gone out while waiting for this result.
     if (this.lastRequestId != requestId) return;
 
     this.completions = this.standalone
-      ? results.filter((result) => isNavigableSearchUrl(result.url))
+      ? results.filter((result) => UrlUtils.isNavigableUrl(result.url))
       : results;
     if (this.standalone) {
       this.setStatus(this.completions.length ? "" : "No matching results. Try another query.");
@@ -530,7 +537,8 @@ class VomnibarUI {
 }
 
 export async function launchSearchPageUrl(url, openInNewTab = false) {
-  if (!isNavigableSearchUrl(url)) {
+  url = await UrlUtils.convertToUrl(url);
+  if (!UrlUtils.isNavigableUrl(url)) {
     throw new Error("This search result cannot be opened from the standalone search page.");
   }
   if (!openInNewTab && ["http:", "https:"].includes(new URL(url).protocol)) {

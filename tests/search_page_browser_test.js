@@ -95,6 +95,36 @@ try {
   await waitForURL(`${base}/unique`);
   console.log("PASS missing result remains editable, Enter opens a corrected query");
 
+  await visit("source=tabs&q=nonexistentquery&open=first");
+  await page.waitForFunction(() =>
+    document.getElementById("search-status").textContent.includes("No matching")
+  );
+  assert.equal(await page.$$eval("li", (items) => items.length), 0);
+  await visit("source=omni&q=nonexistentquery&open=first");
+  await page.waitForFunction(() =>
+    document.getElementById("search-status").textContent.includes("No matching")
+  );
+  assert.equal(await page.$$eval("li", (items) => items.length), 0);
+  console.log("PASS tabs and omni searches exclude their own handoff tab");
+
+  await worker.evaluate(async ({ base, folderId }) => {
+    for (let index = 0; index < 10; index++) {
+      await chrome.bookmarks.create({
+        parentId: folderId,
+        title: "/crowded",
+        url: `javascript:alert(${index})`,
+      });
+    }
+    await chrome.bookmarks.create({
+      parentId: folderId,
+      title: "Longer title /crowded",
+      url: `${base}/valid`,
+    });
+  }, { base, folderId });
+  await visit("source=bookmarks&q=%2Fcrowded&match=title-token&open=first");
+  await waitForURL(`${base}/valid`);
+  console.log("PASS ten excluded bookmarklets cannot crowd out a navigable match");
+
   await visit("source=bookmarks&q=%2Fbad&match=title-token&open=first");
   await page.waitForFunction(() =>
     document.getElementById("search-status").textContent.includes("No matching")
@@ -105,6 +135,13 @@ try {
     document.getElementById("search-status").textContent.includes("Unknown search engine")
   );
   console.log("PASS bookmarklets excluded and invalid engine stays local");
+
+  const bareUrl = `${base.slice("http://".length)}/bare`;
+  await visit(`source=omni&q=${encodeURIComponent(bareUrl)}`);
+  await page.waitForFunction(() => document.querySelector("input") == document.activeElement);
+  await page.keyboard.press("Enter");
+  await waitForURL(`${base}/bare`);
+  console.log("PASS Enter navigates an unselected bare URL in standalone omni search");
 
   await visit("engine=w&q=cats+%26+dogs");
   await waitForURL(`${base}/search?q=cats%20%26%20dogs`);

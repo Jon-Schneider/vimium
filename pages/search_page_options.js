@@ -28,21 +28,3 @@ export function parseSearchPageOptions(search) {
     openFirst: open == "first",
   };
 }
-
-// A standalone search has no originating webpage on which to execute a bookmarklet.
-export function isNavigableSearchUrl(url) {
-  try {
-    return [
-      "http:",
-      "https:",
-      "file:",
-      "ftp:",
-      "chrome:",
-      "chrome-extension:",
-      "moz-extension:",
-      "about:",
-    ].includes(new URL(url).protocol);
-  } catch {
-    return false;
-  }
-}

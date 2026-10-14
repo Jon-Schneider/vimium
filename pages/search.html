@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Vimium Search</title>
+    <meta name="color-scheme" content="light dark">
+    <meta charset="UTF-8">
+    <script type="module" src="search_page.js"></script>
+    <link rel="stylesheet" type="text/css" href="../content_scripts/vimium.css" />
+    <link rel="stylesheet" type="text/css" href="vomnibar_page.css" />
+    <link rel="stylesheet" type="text/css" href="./key_mappings.css" />
+    <link rel="stylesheet" type="text/css" href="search_page.css" />
+  </head>
+  <body>
+    <div id="vomnibar">
+      <div id="vomnibar-search-area">
+        <input type="text" autocomplete="off" aria-label="Search">
+      </div>
+      <p id="search-status" role="status"></p>
+      <ul></ul>
+    </div>
+  </body>
+</html>

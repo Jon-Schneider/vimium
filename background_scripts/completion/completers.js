@@ -285,18 +285,22 @@ const ignoredTopLevelBookmarks = {
 
 // this.bookmarks are loaded asynchronously when refresh() is called.
 export class BookmarkCompleter {
-  async filter({ queryTerms }) {
+  async filter({ queryTerms, match }) {
     if (!this.bookmarks) await this.refresh();
 
     // If the folder separator character is the first character in any query term, then use the
     // bookmark's full path as its title. Otherwise, just use the its regular title.
     let results;
-    const usePathAndTitle = queryTerms.reduce(
+    const usePathAndTitle = match != "title-token" && queryTerms.reduce(
       (prev, term) => prev || term.startsWith(folderSeparator),
       false,
     );
     if (queryTerms.length > 0) {
       results = this.bookmarks.filter((bookmark) => {
+        if (match == "title-token") {
+          const tokens = bookmark.title.toLowerCase().split(/\s+/u);
+          return queryTerms.every((term) => tokens.includes(term.toLowerCase()));
+        }
         const suggestionTitle = usePathAndTitle ? bookmark.pathAndTitle : bookmark.title;
         if (bookmark.hasJavascriptProtocol == null) {
           bookmark.hasJavascriptProtocol = UrlUtils.hasJavascriptProtocol(bookmark.url);
@@ -590,11 +594,13 @@ export class DomainCompleter {
 // Searches through all open tabs, matching on title and URL.
 // If the query is empty, then return a list of open tabs, sorted by recency.
 export class TabCompleter {
-  async filter({ queryTerms }) {
+  async filter({ queryTerms, excludeTabId }) {
     await bgUtils.tabRecency.init();
     // We search all tabs, not just those in the current window.
     const tabs = await chrome.tabs.query({});
-    const results = tabs.filter((tab) => ranking.matches(queryTerms, tab.url, tab.title));
+    const results = tabs.filter((tab) =>
+      tab.id != excludeTabId && ranking.matches(queryTerms, tab.url, tab.title)
+    );
     const suggestions = results
       .map((tab) => {
         const suggestion = new Suggestion({
@@ -724,9 +730,7 @@ export class MultiCompleter {
   }
 
   refresh() {
-    for (const c of this.completers) {
-      if (c.refresh) c.refresh();
-    }
+    return Promise.all(this.completers.map((c) => c.refresh?.()));
   }
 
   cancel() {
@@ -760,6 +764,15 @@ export class MultiCompleter {
 
     const promises = completers.map((c) => c.filter(request));
     let results = (await Promise.all(promises)).flat(1);
+    // Filter before ranking, deduplication, and the result limit so unsupported destinations
+    // cannot crowd out navigable results in the standalone search page.
+    if (request.navigationOnly) {
+      results = results.filter((s) =>
+        UrlUtils.isNavigableUrl(s.url) &&
+        // Search handoffs recorded in history echo the query instead of providing a destination.
+        (s.description != "history" || s.url.split(/[?#]/u)[0] != request.excludeHistoryUrl)
+      );
+    }
     results = this.postProcessSuggestions(request, queryTerms, results);
     return results;
   }

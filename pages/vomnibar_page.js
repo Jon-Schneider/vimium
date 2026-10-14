@@ -22,7 +22,7 @@ export function reset() {
   ui = null;
 }
 
-export async function activate(options) {
+export async function activate(options, standalone = false) {
   Utils.assertType(VomnibarShowOptions, options || {});
   await Settings.onLoaded();
   userSearchEngines.set(Settings.get("searchEngines"));
@@ -34,6 +34,7 @@ export async function activate(options) {
     selectFirst: false,
     keyword: null,
     prefixCount: 1,
+    match: "default",
   };
 
   options = Object.assign(defaults, options);
@@ -41,13 +42,23 @@ export async function activate(options) {
   if (ui == null) {
     ui = new VomnibarUI();
   }
+  ui.standalone = standalone;
+  ui.standaloneTabId = standalone ? (await chrome.tabs.getCurrent()).id : null;
+  ui.match = options.match;
   ui.setCompleterName(options.completer);
-  ui.refreshCompletions();
+  await ui.refreshCompletions();
   ui.setInitialSelectionValue(options.selectFirst ? 0 : -1);
   ui.setForceNewTab(options.newTab);
   ui.setQuery(options.query);
   ui.setPrefixCount(options.prefixCount);
   ui.setActiveUserSearchEngine(userSearchEngines.keywordToEngine[options.keyword]);
+  if (standalone && options.completer == "omni" && !ui.isUserSearchEngineActive()) {
+    const engine = ui.getUserSearchEngineForQuery();
+    if (engine) {
+      ui.setActiveUserSearchEngine(engine);
+      ui.setQuery(options.query.trimStart().slice(engine.keyword.length).trimStart());
+    }
+  }
   // Use await here for vomnibar_test.js, so that this page doesn't get unloaded while a test is
   // running.
   await ui.update();
@@ -107,6 +118,14 @@ class VomnibarUI {
   // This ensures that the vomnibar is actually hidden before any new tab is created, and avoids
   // flicker after opening a link in a new tab then returning to the original tab. See #1485.
   hide(onHiddenCallback = null) {
+    if (this.standalone) {
+      // There is no owner iframe to acknowledge hiding. Keep the search usable when opening
+      // another tab or dismissing the selection.
+      if (onHiddenCallback) {
+        Promise.resolve().then(onHiddenCallback).catch((error) => this.setStatus(error.message));
+      }
+      return;
+    }
     this.onHiddenCallback = onHiddenCallback;
     this.input.blur();
     this.reset();
@@ -315,13 +334,7 @@ class VomnibarUI {
         if (isUrl) {
           this.hide(() => this.launchUrl(query, openInNewTab));
         } else {
-          this.hide(() =>
-            chrome.runtime.sendMessage({
-              handler: "launchSearchQuery",
-              query,
-              openInNewTab,
-            })
-          );
+          this.hide(() => this.launchSearchQuery(query, openInNewTab));
         }
       }
     } else if (isPrimarySearchSuggestion(completion)) {
@@ -360,12 +373,25 @@ class VomnibarUI {
       queryTerms,
       query,
       seenTabToOpenCompletionList: this.seenTabToOpenCompletionList,
+      ...(this.match == "title-token" ? { match: this.match } : {}),
+      ...(this.standalone
+        ? {
+          navigationOnly: true,
+          excludeTabId: this.standaloneTabId,
+          excludeHistoryUrl: chrome.runtime.getURL("pages/search.html"),
+        }
+        : {}),
     });
 
     // Ensure that no new filter requests have gone out while waiting for this result.
     if (this.lastRequestId != requestId) return;
 
-    this.completions = results;
+    this.completions = this.standalone
+      ? results.filter((result) => UrlUtils.isNavigableUrl(result.url))
+      : results;
+    if (this.standalone) {
+      this.setStatus(this.completions.length ? "" : "No matching results. Try another query.");
+    }
     this.selection = this.completions[0]?.autoSelect ? 0 : this.initialSelectionValue;
     this.renderCompletions(this.completions);
     this.selection = Math.min(
@@ -381,7 +407,7 @@ class VomnibarUI {
   }
 
   refreshCompletions() {
-    chrome.runtime.sendMessage({
+    return chrome.runtime.sendMessage({
       handler: "refreshCompletions",
       completerName: this.completerName,
     });
@@ -402,7 +428,10 @@ class VomnibarUI {
 
     // For custom search engines, we suppress the leading prefix (e.g. the "w" of "w query terms")
     // within the vomnibar input.
-    if (!this.isUserSearchEngineActive() && this.getUserSearchEngineForQuery() != null) {
+    if (
+      (!this.standalone || this.completerName == "omni") &&
+      !this.isUserSearchEngineActive() && this.getUserSearchEngineForQuery() != null
+    ) {
       this.activeUserSearchEngine = this.getUserSearchEngineForQuery();
       const queryTerms = this.input.value.trim().split(/\s+/);
       this.input.value = queryTerms.slice(1).join(" ");
@@ -436,15 +465,28 @@ class VomnibarUI {
     this.input.focus();
   }
 
-  openCompletion(completion, openInNewTab) {
+  async openCompletion(completion, openInNewTab) {
     if (completion.description == "tab") {
-      chrome.runtime.sendMessage({ handler: "selectSpecificTab", id: completion.tabId });
+      if (this.standalone) {
+        const currentTab = await chrome.tabs.getCurrent();
+        const tab = await chrome.tabs.update(completion.tabId, { active: true });
+        if (document.visibilityState == "visible") {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
+        if (currentTab.id != tab.id) await chrome.tabs.remove(currentTab.id);
+      } else {
+        await chrome.runtime.sendMessage({ handler: "selectSpecificTab", id: completion.tabId });
+      }
     } else {
-      this.launchUrl(completion.url, openInNewTab);
+      await this.launchUrl(completion.url, openInNewTab);
     }
   }
 
   async launchUrl(url, openInNewTab) {
+    if (this.standalone) {
+      await launchSearchPageUrl(url, openInNewTab);
+      return;
+    }
     // If the URL is a bookmarklet (so, prefixed with "javascript:"), then always open it in the
     // current tab.
     if (openInNewTab && UrlUtils.hasJavascriptProtocol(url)) {
@@ -454,6 +496,18 @@ class VomnibarUI {
       handler: openInNewTab ? "openUrlInNewTab" : "openUrlInCurrentTab",
       url,
     });
+  }
+
+  async launchSearchQuery(query, openInNewTab) {
+    if (this.standalone) {
+      let tab = await chrome.tabs.getCurrent();
+      if (openInNewTab) {
+        tab = await chrome.tabs.create({ index: tab.index + 1, openerTabId: tab.id });
+      }
+      await chrome.search.query({ text: query, tabId: tab.id });
+    } else {
+      await chrome.runtime.sendMessage({ handler: "launchSearchQuery", query, openInNewTab });
+    }
   }
 
   initDom() {
@@ -474,6 +528,29 @@ class VomnibarUI {
     });
     // A click anywhere else hides the vomnibar.
     document.addEventListener("click", () => this.hide());
+  }
+
+  setStatus(message) {
+    const status = document.getElementById("search-status");
+    if (status) status.textContent = message;
+  }
+}
+
+export async function launchSearchPageUrl(url, openInNewTab = false) {
+  url = await UrlUtils.convertToUrl(url);
+  if (!UrlUtils.isNavigableUrl(url)) {
+    throw new Error("This search result cannot be opened from the standalone search page.");
+  }
+  if (!openInNewTab && ["http:", "https:"].includes(new URL(url).protocol)) {
+    // Back skips the search handoff, using a normal page navigation for browser site searches.
+    globalThis.location.replace(url);
+    return;
+  }
+  const tab = await chrome.tabs.getCurrent();
+  if (openInNewTab) {
+    await chrome.tabs.create({ url, index: tab.index + 1, openerTabId: tab.id });
+  } else {
+    await chrome.tabs.update(tab.id, { url });
   }
 }
 

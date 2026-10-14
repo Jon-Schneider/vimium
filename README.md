@@ -19,6 +19,55 @@ Vimium's Options page can be reached via a link on the help dialog (type `?`) or
 to Vimium on the extension pages of Chrome and Edge (`chrome://extensions`), or Firefox
 (`about:addons`).
 
+## Search from the browser address bar
+
+Vimium's standalone search page works independently of the current webpage. To use it from Chrome's
+address bar, add a site search in `chrome://settings/searchEngines`. Replace `<extension-id>` below
+with the ID of your enabled Vimium installation, shown in `chrome://extensions`. An unpacked build
+has a different ID from the Web Store installation.
+
+For example, give the site search the shortcut `/` and this URL:
+
+```text
+chrome-extension://<extension-id>/pages/search.html?source=bookmarks&q=/%s&match=title-token&open=first
+```
+
+With a bookmark named `GitHub /gh /github`, type `/`, Space or Tab, `gh`, Enter to open it. Token
+matching compares whole whitespace-separated words in the bookmark title, ignoring case; `/gh` does
+not match `/github`, a folder name, or a URL. Tokens can occur anywhere in the title. Multiple query
+tokens must all occur in the title. If several bookmarks match, `open=first` opens the first result
+in Vimium's usual ranking order. Omit `open=first` to select from the results yourself.
+
+The search page accepts these parameters:
+
+| Parameter | Behavior                                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------------------- |
+| `q`       | Search query; use `%s` in a browser site-search URL.                                                          |
+| `source`  | `bookmarks`, `tabs`, or `omni` (the default), using Vimium's existing search sources.                         |
+| `match`   | `default` (usual matching), or `title-token` for bookmark titles only.                                        |
+| `open`    | `first` automatically opens or switches to the first result. Empty queries never open a result automatically. |
+| `engine`  | A keyword from Vimium's custom search engines, used instead of `source`, `match`, and `open`.                 |
+
+No matches leaves the page open for editing the query. Use Up/Down to select a result and Enter to
+open it; modifier+Enter opens URLs in another tab. Bookmarklets and `data:` URLs are excluded
+because the standalone page has no originating webpage on which to run them. The normal in-page
+Vomnibar continues to support bookmarklets.
+
+To invoke a configured web engine, use a URL such as:
+
+```text
+chrome-extension://<extension-id>/pages/search.html?engine=w&q=%s
+```
+
+This substitutes the query into the engine configured as `w` in Vimium's options and opens that
+search URL. It does not select the first result on the destination website. The standalone page can
+also be a URL template in Vimium's own custom search-engine settings.
+
+For development, `deno run -A make.js test-search-page` loads the extension in a temporary Chrome
+profile and tests navigation, result selection, custom engines, and bookmark updates. It uses
+Puppeteer's installed Chrome; `PUPPETEER_EXECUTABLE_PATH` can select another Chrome for Testing
+binary.
+
 ## Keyboard Bindings
 
 Modifier keys are specified as `<c-x>`, `<m-x>`, and `<a-x>` for ctrl+x, meta+x, and alt+x

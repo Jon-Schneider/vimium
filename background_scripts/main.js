@@ -741,7 +741,7 @@ const sendRequestHandlers = {
 
   refreshCompletions(request) {
     const completer = completers[request.completerName];
-    completer.refresh();
+    return completer.refresh();
   },
 
   cancelCompletions(request) {
@@ -761,15 +761,19 @@ Utils.addChromeRuntimeOnMessageListener(
       sender.frameId,
       // request // Often useful for debugging.
     );
-    // NOTE(philc): We expect all messages to come from a content script in a tab. I've observed in
-    // Firefox when the extension is first installed, domReady and initializeFrame messages come from
-    // content scripts in about:blank URLs, which have a null sender.tab. I don't know what this
-    // corresponds to. Since we expect a valid sender.tab, ignore those messages.
-    if (sender.tab == null) return;
+    // Tab operations require a sender.tab. Standalone extension pages can request completions
+    // without one. Ignore other messages without a tab, including Firefox's initial about:blank
+    // domReady and initializeFrame messages.
+    if (
+      sender.tab == null &&
+      !["filterCompletions", "refreshCompletions", "cancelCompletions"].includes(request.handler)
+    ) {
+      return;
+    }
     await Settings.onLoaded();
     request = Object.assign({ count: 1 }, request, {
       tab: sender.tab,
-      tabId: sender.tab.id,
+      tabId: sender.tab?.id,
     });
     const handler = sendRequestHandlers[request.handler];
     const result = handler ? await handler(request, sender) : null;

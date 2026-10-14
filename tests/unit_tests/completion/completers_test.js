@@ -58,6 +58,42 @@ context("bookmark completer", () => {
     assert.equal([], results.map((suggestion) => suggestion.url));
   });
 
+  should(
+    "match complete title tokens without matching URLs, folders, or longer aliases",
+    async () => {
+      const tree = [{
+        title: "/gh",
+        children: [
+          { title: "GitHub /GH /github", url: "https://example.com/exact" },
+          { title: "Longer /github", url: "https://example.com/longer" },
+          { title: "URL only", url: "https://example.com/gh" },
+          { title: "Folder only", url: "https://example.com/folder" },
+          { title: "Punctuation /gh,", url: "https://example.com/punctuation" },
+          { title: "Unicode\t/日本\u00a0/c++", url: "https://example.com/unicode" },
+        ],
+      }];
+      stub(chrome.bookmarks, "getTree", () => tree);
+      const results = await completer.filter({ queryTerms: ["/gh"], match: "title-token" });
+      assert.equal(["https://example.com/exact"], results.map((s) => s.url));
+      assert.equal("GitHub /GH /github", results[0].title);
+      const unicode = await completer.filter({
+        queryTerms: ["/日本", "/c++"],
+        match: "title-token",
+      });
+      assert.equal(["https://example.com/unicode"], unicode.map((s) => s.url));
+      assert.equal([], await completer.filter({ queryTerms: [], match: "title-token" }));
+    },
+  );
+
+  should("wait for refreshed bookmarks before resolving a later query", async () => {
+    const multi = new MultiCompleter([completer]);
+    await multi.refresh();
+    stub(chrome.bookmarks, "getTree", () => [bookmark3]);
+    await multi.refresh();
+    const results = await filterCompleter(multi, ["mark3"]);
+    assert.equal([bookmark3.url], results.map((s) => s.url));
+  });
+
   should("construct bookmark paths correctly", async () => {
     completer.refresh();
     await filterCompleter(completer, ["mark2"]);

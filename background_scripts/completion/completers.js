@@ -285,18 +285,22 @@ const ignoredTopLevelBookmarks = {
 
 // this.bookmarks are loaded asynchronously when refresh() is called.
 export class BookmarkCompleter {
-  async filter({ queryTerms }) {
+  async filter({ queryTerms, match }) {
     if (!this.bookmarks) await this.refresh();
 
     // If the folder separator character is the first character in any query term, then use the
     // bookmark's full path as its title. Otherwise, just use the its regular title.
     let results;
-    const usePathAndTitle = queryTerms.reduce(
+    const usePathAndTitle = match != "title-token" && queryTerms.reduce(
       (prev, term) => prev || term.startsWith(folderSeparator),
       false,
     );
     if (queryTerms.length > 0) {
       results = this.bookmarks.filter((bookmark) => {
+        if (match == "title-token") {
+          const tokens = bookmark.title.toLowerCase().split(/\s+/u);
+          return queryTerms.every((term) => tokens.includes(term.toLowerCase()));
+        }
         const suggestionTitle = usePathAndTitle ? bookmark.pathAndTitle : bookmark.title;
         if (bookmark.hasJavascriptProtocol == null) {
           bookmark.hasJavascriptProtocol = UrlUtils.hasJavascriptProtocol(bookmark.url);
@@ -724,9 +728,7 @@ export class MultiCompleter {
   }
 
   refresh() {
-    for (const c of this.completers) {
-      if (c.refresh) c.refresh();
-    }
+    return Promise.all(this.completers.map((c) => c.refresh?.()));
   }
 
   cancel() {

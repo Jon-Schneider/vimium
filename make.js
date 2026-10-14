@@ -429,8 +429,13 @@ async function testDom() {
 desc("Run DOM tests");
 task("test-dom", [], testDom);
 
-desc("Run unit and DOM tests");
-task("test", ["test-unit", "test-dom"]);
+desc("Test the standalone search page in a loaded Chrome extension");
+task("test-search-page", [], async () => {
+  await import("./tests/search_page_browser_test.js");
+});
+
+desc("Run unit, DOM, and standalone search tests");
+task("test", ["test-unit", "test-dom", "test-search-page"]);
 
 desc("Check code formatting and lint issues");
 task("check", [], async () => {
